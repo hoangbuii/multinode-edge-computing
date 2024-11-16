@@ -9,9 +9,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -82,10 +82,19 @@ func stopProcessFromPidFile(filename string) error {
 		return fmt.Errorf("failed to find process with PID %d: %v", pid, err)
 	}
 
-	// Send a termination signal to the process
-	err = process.Signal(syscall.SIGTERM) // or syscall.SIGKILL for forceful termination
-	if err != nil {
-		return fmt.Errorf("failed to send signal to process: %v", err)
+	// Terminate the process in a cross-platform manner
+	if runtime.GOOS == "windows" {
+		// Windows: Use process.Kill
+		err = process.Kill()
+		if err != nil {
+			return fmt.Errorf("failed to kill process on Windows: %v", err)
+		}
+	} else {
+		// Unix-based: Gracefully stop the process
+		err = process.Signal(os.Interrupt)
+		if err != nil {
+			return fmt.Errorf("failed to send interrupt signal: %v", err)
+		}
 	}
 
 	// Wait a moment to ensure termination
@@ -347,6 +356,9 @@ func main() {
 	}
 	command := os.Args[1]
 	pidFile := "/tmp/test.pid"
+	if runtime.GOOS == "windows" {
+		pidFile = "C:\\tmp\\test.pid"
+	}
 
 	switch command {
 	case "version":
