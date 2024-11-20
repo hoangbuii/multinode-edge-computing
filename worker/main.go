@@ -22,7 +22,11 @@ var STAGE = "idle"
 
 func joinSwarm(token string, masterIP string) error {
 	// Define the shell script command
-	cmd := exec.Command("bash", "-c", "docker swarm join --token "+token+" "+masterIP+":2377")
+	shellCmd := "bash"
+	if runtime.GOOS == "windows" {
+		shellCmd = "powershell"
+	}
+	cmd := exec.Command(shellCmd, "-c", "docker swarm join --token "+token+" "+masterIP+":2377")
 
 	// Run the command and capture the output
 	_, err := cmd.Output()
@@ -31,14 +35,22 @@ func joinSwarm(token string, masterIP string) error {
 }
 
 func leaveSwarm() error {
-	cmd := exec.Command("bash", "-c", "docker swarm leave")
+	shellCmd := "bash"
+	if runtime.GOOS == "windows" {
+		shellCmd = "powershell"
+	}
+	cmd := exec.Command(shellCmd, "-c", "docker swarm leave")
 	_, err := cmd.Output()
 	return err
 }
 
 func checkDockerVersion() (string, error) {
 	// Define the shell script command
-	cmd := exec.Command("bash", "-c", "docker --version")
+	shellCmd := "bash"
+	if runtime.GOOS == "windows" {
+		shellCmd = "powershell"
+	}
+	cmd := exec.Command(shellCmd, "-c", "docker --version")
 
 	// Run the command and capture the output
 	output, err := cmd.Output()
@@ -311,6 +323,10 @@ func startTCPConnection(serverIP string, tcpPort int, command string) {
 			err := joinSwarm(strings.TrimSuffix(response, "\n"), serverIP)
 			if err != nil {
 				fmt.Println("error i docker1")
+				err := leaveSwarm()
+				if err != nil {
+					fmt.Println("Error to leave Swarm: ", err)
+				}
 				return
 			}
 		}
