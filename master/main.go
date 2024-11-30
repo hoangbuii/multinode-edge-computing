@@ -19,6 +19,16 @@ import (
 
 var masterID = "master_"
 
+func initSwarm() {
+	cmd := exec.Command("bash", "-c", "docker swarm init")
+	_, err := cmd.Output()
+	if err == nil {
+		fmt.Println("INFO: Initialize Docker Swarm")
+	} else {
+		fmt.Println("WARN: Docker Swarm has already been initialized")
+	}
+}
+
 func getJoinToken() (string, error) {
 	// Define the shell script command
 	cmd := exec.Command("bash", "-c", "docker swarm join-token worker --quiet")
@@ -78,7 +88,7 @@ func listService() (string, error) {
 func scaleAllServiceTo(replicas int) error {
 	command := "for i in $(docker service ls --format '{{.ID}}'); do docker service scale $i=" + strconv.Itoa(replicas) + "; done"
 	cmd := exec.Command("bash", "-c", command)
-	fmt.Println("Service has been scaled to " + strconv.Itoa(replicas))
+	// fmt.Println("Service has been scaled to " + strconv.Itoa(replicas))
 	// Run the command and capture the output
 	_, err := cmd.Output()
 
@@ -181,7 +191,7 @@ func StoreWorkerIDToRedis(mID string, wID string, redisAdd string, port int) err
 	if err != nil {
 		return fmt.Errorf("failed to store WorkerID for MasterID %s: %v", wID, err)
 	}
-	fmt.Printf("Stored WorkerID: %s, MasterID: %s in Redis\n", wID, mID)
+	fmt.Printf("INFO: Stored WorkerID: %s, MasterID: %s in Redis\n", wID, mID)
 
 	return nil
 }
@@ -227,22 +237,22 @@ func broadcaster(ifaceName string, message string) {
 	// Create a UDP connection.
 	conn, err := net.Dial("udp", broadcastAddr)
 	if err != nil {
-		fmt.Println("Error creating connection:", err)
+		fmt.Println("ERROR: Error creating connection:", err)
 		return
 	}
 	defer conn.Close()
 
 	// Enable broadcasting
 	if err := conn.(*net.UDPConn).SetWriteBuffer(1024); err != nil {
-		fmt.Println("Error setting broadcast:", err)
+		fmt.Println("ERROR: Error setting broadcast:", err)
 		return
 	}
-
+	fmt.Println("INFO: Server broadcast via port 9090")
 	// Broadcast the message every 10 seconds
 	for {
 		_, err = conn.Write([]byte(message))
 		if err != nil {
-			fmt.Println("Error sending message:", err)
+			fmt.Println("ERROR: Error sending message:", err)
 			return
 		}
 		//fmt.Println("Message broadcasted successfully!")
@@ -255,35 +265,38 @@ func broadcaster(ifaceName string, message string) {
 // handleTCPConnection handles an individual TCP connection with a client
 func handleTCPConnection(conn net.Conn) {
 	defer conn.Close()
-	fmt.Println("Connected to client:", conn.RemoteAddr())
+	fmt.Println("INFO: Connected to worker:", conn.RemoteAddr())
 
 	// Continuously read messages from client until the client closes the connection
 	for {
 		message, err := bufio.NewReader(conn).ReadString('\n')
 		if err != nil {
-			fmt.Println("Client disconnected:", conn.RemoteAddr())
+			fmt.Println("INFO: Worker disconnected:", conn.RemoteAddr())
 			// err = removeDownNode()
 			// if err != nil {
 			// 	fmt.Println("error i docker")
 			// }
 			return
 		}
-		fmt.Println("Received from client:", message)
+		if strings.HasPrefix(message, "worker_") {
+			fmt.Printf("INFO: %s has been joined to cluster\n", strings.TrimSuffix(message, "\n"))
+		}
+		// fmt.Println("Received from client:", message)
 
-		if err := StoreWorkerIDToRedis("master_", message, "localhost", 6379); err != nil {
-			fmt.Println("Error storing messages to Redis:", err)
+		if err := StoreWorkerIDToRedis(masterID, strings.TrimSuffix(message, "\n"), "localhost", 6379); err != nil {
+			fmt.Println("ERROR: Error storing messages to Redis:", err)
 		} else {
-			fmt.Println("All messages stored in Redis successfully.")
+			// fmt.Println("All messages stored in Redis successfully.")
 		}
 		// Respond to client
 		response, err := getJoinToken()
 		if err != nil {
-			fmt.Println("error i docker")
+			fmt.Println("ERROR: Failed to get join token")
 			return
 		}
 		_, err = conn.Write([]byte(response))
 		if err != nil {
-			fmt.Println("Error sending message to client:", err)
+			fmt.Println("ERROR: Error sending message to client:", err)
 			return
 		}
 	}
@@ -293,16 +306,16 @@ func handleTCPConnection(conn net.Conn) {
 func startTCPServer(tcpPort int) {
 	listener, err := net.Listen("tcp", ":"+strconv.Itoa(tcpPort))
 	if err != nil {
-		fmt.Println("Error starting TCP server:", err)
+		fmt.Println("ERROR: Error starting TCP server:", err)
 		return
 	}
 	defer listener.Close()
 
-	fmt.Println("TCP server listening on port", tcpPort)
+	fmt.Println("INFO: TCP server listening on port", tcpPort)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection:", err)
+			fmt.Println("ERROR: Error accepting connection:", err)
 			continue
 		}
 		go handleTCPConnection(conn)
@@ -414,26 +427,26 @@ func scaleService() {
 	for {
 		err := removeDownNode()
 		if err != nil {
-			fmt.Println("error i docker")
+			fmt.Println("ERROR: Failed to remode Down node")
 		}
 		swarmNode, err := listNode()
 		if err != nil {
-			fmt.Println("error i docker")
+			fmt.Println("EROR: Failed to list Node")
 		}
 		lines := strings.Split(swarmNode, "\n")
 		numberOfSwarmNode := len(lines) - 1
-		fmt.Printf("Number of Swarm Node: %d\n", numberOfSwarmNode)
+		// fmt.Printf("Number of Swarm Node: %d\n", numberOfSwarmNode)
 		time.Sleep(1 * time.Minute)
-		swarmService, err := listService()
-		if err != nil {
-			fmt.Println("error i docker")
-		}
-		lines = strings.Split(swarmService, "\n")
-		numberOfSwarmService := len(lines) - 1
-		fmt.Printf("Number of Swarm Node: %d\n", numberOfSwarmService)
+		// swarmService, err := listService()
+		// if err != nil {
+		// 	fmt.Println("Fail to list Service")
+		// }
+		// lines = strings.Split(swarmService, "\n")
+		// numberOfSwarmService := len(lines) - 1
+		// fmt.Printf("Number of Swarm Node: %d\n", numberOfSwarmService)
 		err = scaleAllServiceTo(numberOfSwarmNode)
 		if err != nil {
-			fmt.Println("error i docker scale")
+			fmt.Println("ERROR: Failed to scale node")
 		}
 	}
 
@@ -462,7 +475,7 @@ func printVersion() {
 	}
 	err = PingRedis("localhost", 6379)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("ERROR:", err)
 	} else {
 		fmt.Println("Redis server is reachable.")
 	}
@@ -470,7 +483,8 @@ func printVersion() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: ecm <start|stop>")
+		fmt.Println("Missing command")
+		printHelp()
 		return
 	}
 	command := os.Args[1]
@@ -480,13 +494,19 @@ func main() {
 	switch command {
 	case "version":
 		printVersion()
+	case "init":
+		initSwarm()
 	case "network":
 		showNetworkConfiguration()
 	case "start":
 		_, err := checkDockerVersion()
 		if err != nil {
-			fmt.Println("Can't found Docker!")
+			fmt.Println("FATAL: Can't found Docker!")
 			return
+		}
+		err = PingRedis("localhost", 6379)
+		if err != nil {
+			fmt.Println("WARN: Unable to connect to redis")
 		}
 		if len(os.Args) < 3 {
 			fmt.Println("Missing interface name")
@@ -495,26 +515,28 @@ func main() {
 		broadcast_iface := os.Args[2]
 		err = writePidToFile(pidFile)
 		if err != nil {
-			fmt.Println("Error writing PID to file:", err)
+			fmt.Println("FATAL: Error writing PID to file:", err)
 			return
 		}
 
 		masterID = "master_" + GenerateID(10)
-		fmt.Println("Start with " + masterID)
+		fmt.Println("INFO: Start with " + masterID)
 		go broadcaster(broadcast_iface, masterID)
 		go startTCPServer(8080)
 		go scaleService()
 		for {
 
 		}
+	case "help":
+		printHelp()
 	case "stop":
 		// Stop the process from the PID file
 		err := stopProcessFromPidFile(pidFile)
 		if err != nil {
-			fmt.Println("Error stopping process:", err)
+			fmt.Println("ERROR: Error stopping process:", err)
 		}
 	default:
-		fmt.Println("Unknown command.")
+		fmt.Println("Unknown command.\n")
 		printHelp()
 	}
 }

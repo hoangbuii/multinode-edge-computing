@@ -30,7 +30,9 @@ func joinSwarm(token string, masterIP string) error {
 
 	// Run the command and capture the output
 	_, err := cmd.Output()
-
+	if err == nil {
+		fmt.Println("INFO: This node joined a swarm as a worker")
+	}
 	return err
 }
 
@@ -41,6 +43,9 @@ func leaveSwarm() error {
 	}
 	cmd := exec.Command(shellCmd, "-c", "docker swarm leave")
 	_, err := cmd.Output()
+	if err != nil {
+		fmt.Println("INFO: Node left the swarm")
+	}
 	return err
 }
 
@@ -206,7 +211,7 @@ func StoreMessagesToRedis(messages map[string]string, redisAdd string, port int)
 		if err != nil {
 			return fmt.Errorf("failed to store message for IP %s: %v", ip, err)
 		}
-		fmt.Printf("Stored IP: %s, Message: %s in Redis\n", ip, message)
+		fmt.Printf("INFO: Stored IP: %s, MasterID: %s in Redis\n", ip, message)
 	}
 	return nil
 }
@@ -223,7 +228,7 @@ func StoreWorkerIDToRedis(workerID string, masterID string, redisAdd string, por
 	if err != nil {
 		return fmt.Errorf("failed to store message for IP %s: %v", workerID, err)
 	}
-	fmt.Printf("Stored Worker ID: %s, MasterID: %s in Redis\n", workerID, masterID)
+	fmt.Printf("INFO: Stored Worker ID: %s, MasterID: %s in Redis\n", workerID, masterID)
 	return nil
 }
 
@@ -240,12 +245,10 @@ func scanner(port int) map[string]string {
 	// Create a UDP connection
 	conn, err := net.ListenUDP("udp", &addr)
 	if err != nil {
-		fmt.Println("Error creating UDP listener:", err)
+		fmt.Println("FATAL: Error creating UDP listener:", err)
 		return uniqueMessages
 	}
 	defer conn.Close()
-
-	fmt.Printf("Listening for broadcast messages on port %d for 11 seconds...\n", port)
 
 	buffer := make([]byte, 1024)
 	timeout := time.After(11 * time.Second)
@@ -253,7 +256,7 @@ func scanner(port int) map[string]string {
 	for {
 		select {
 		case <-timeout:
-			fmt.Println("Receiver timed out after 11 seconds.")
+			fmt.Println("INFO: Receiver timed out after 11 seconds.")
 			return uniqueMessages
 		default:
 			// Set a read deadline to allow checking the timeout regularly
@@ -266,7 +269,7 @@ func scanner(port int) map[string]string {
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 					continue
 				}
-				fmt.Println("Error reading message:", err)
+				fmt.Println("ERROR: Error reading message:", err)
 				continue
 			}
 
@@ -283,12 +286,12 @@ func startTCPConnection(serverIP string, tcpPort int, command string) {
 	conn, err := net.Dial("tcp", serverIP+":"+strconv.Itoa(tcpPort))
 	if err != nil {
 		STAGE = "idle"
-		fmt.Println("Error connecting to TCP server:", err)
+		fmt.Println("ERROR: Error connecting to TCP server:", err)
 		return
 	}
 	defer conn.Close()
 
-	fmt.Println("Connected to server:", serverIP)
+	fmt.Println("INFO: Connected to master: ", serverIP)
 
 	// Continuously send messages to server until the user types "exit"
 
@@ -296,14 +299,14 @@ func startTCPConnection(serverIP string, tcpPort int, command string) {
 
 	if message == "exit" {
 		STAGE = "idle"
-		fmt.Println("Closing connection to server")
+		fmt.Println("WARN: Closing connection to server")
 		return
 	}
 
 	// Send message to server
 	_, err = conn.Write([]byte(message + "\n"))
 	if err != nil {
-		fmt.Println("Error sending message to server:", err)
+		fmt.Println("ERROR: Error sending message to server:", err)
 		return
 	}
 
@@ -314,20 +317,25 @@ func startTCPConnection(serverIP string, tcpPort int, command string) {
 		response, err := bufio.NewReader(conn).ReadString('\n')
 		if err != nil {
 			STAGE = "idle"
-			fmt.Println("Server closed the connection")
+			fmt.Println("WARN: Master node closed the connection")
 			return
 		}
 
-		fmt.Println("Received from server:", strings.TrimSpace(response))
+		// fmt.Println("Received from server:", strings.TrimSpace(response))
 		if strings.HasPrefix(response, "SWMTKN") {
+			fmt.Println("INFO: Received token:", strings.TrimSpace(response))
 			err := joinSwarm(strings.TrimSuffix(response, "\n"), serverIP)
 			if err != nil {
-				fmt.Println("error i docker1")
+				fmt.Println("ERROR: Unable to join swarm or master node disconnected")
 				err := leaveSwarm()
 				if err != nil {
-					fmt.Println("Error to leave Swarm: ", err)
+					fmt.Println("ERROR: Error to leave Swarm: ", err)
+				} else {
+					fmt.Println("DEBUG: Node has been left the swarm")
 				}
 				return
+			} else {
+
 			}
 		}
 		STAGE = "connected"
@@ -359,7 +367,7 @@ func printVersion() {
 	}
 	err = PingRedis("localhost", 6379)
 	if err != nil {
-		fmt.Println("Error:", err)
+		fmt.Println("ERROR:", err)
 	} else {
 		fmt.Println("Redis server is reachable.")
 	}
@@ -367,7 +375,8 @@ func printVersion() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: ecw <start|stop>")
+		fmt.Println("Missing command")
+		printHelp()
 		return
 	}
 	command := os.Args[1]
@@ -381,38 +390,39 @@ func main() {
 		printVersion()
 	case "start":
 		for {
-			fmt.Println("Stage:" + STAGE)
+			fmt.Println("INFO: Looking for Master node")
 			if STAGE == "idle" {
 				uniqueMessages := scanner(9090)
 				err := writePidToFile(pidFile)
 				if err != nil {
-					fmt.Println("Error writing PID to file:", err)
+					fmt.Println("FATAL: Error writing PID to file:", err)
 					return
 				}
 				for mID, mIP := range uniqueMessages {
-					fmt.Printf("MasterID: %s, IP: %s\n", mID, mIP)
+					fmt.Printf("INFO: MasterID: %s, IP: %s\n", mID, mIP)
 					workerID, err := RetrieveWorkerIDFromMasterID(mID, "localhost", 6379)
 					if err != nil {
-						fmt.Println("Error:", err)
+						fmt.Println("ERROR:", err)
 					} else {
 						startTCPConnection(mIP, 8080, workerID)
 					}
 				}
 
 				if err := StoreMessagesToRedis(uniqueMessages, "localhost", 6379); err != nil {
-					fmt.Println("Error storing messages to Redis:", err)
+					fmt.Println("ERROR: Error storing messages to Redis:", err)
 				} else {
-					fmt.Println("All messages stored in Redis successfully.")
+					fmt.Println("INFO: Stored masterIP(s)")
 				}
 			}
 
 			time.Sleep(1 * time.Minute)
 		}
 	case "scan":
+		fmt.Println("INFO: Listening for broadcast messages on port 9090 for 11 seconds...")
 		uniqueMessages := scanner(9090)
 		err := writePidToFile(pidFile)
 		if err != nil {
-			fmt.Println("Error writing PID to file:", err)
+			fmt.Println("ERROR: Error writing PID to file:", err)
 			return
 		}
 		for mID, mIP := range uniqueMessages {
@@ -420,7 +430,7 @@ func main() {
 		}
 
 		if err := StoreMessagesToRedis(uniqueMessages, "localhost", 6379); err != nil {
-			fmt.Println("Error storing messages to Redis:", err)
+			fmt.Println("ERROR: Error storing Master ID to Redis:", err)
 		}
 	case "get":
 		if len(os.Args) < 3 {
@@ -430,13 +440,13 @@ func main() {
 		mID := os.Args[2]
 		IP, err := RetrieveIPFromMasterID(mID, "localhost", 6379)
 		if err != nil {
-			fmt.Println("Error:", err)
+			fmt.Println("ERROR:", err)
 		} else {
 			fmt.Printf("IP for Master %s: %s\n", mID, IP)
 		}
 		workerID, err := RetrieveWorkerIDFromMasterID(mID, "localhost", 6379)
 		if err != nil {
-			fmt.Println("Error:", err)
+			fmt.Println("ERROR:", err)
 		} else {
 			fmt.Printf("WokerID for Master %s: %s\n", mID, workerID)
 		}
@@ -448,31 +458,20 @@ func main() {
 		mID := os.Args[2]
 		workerID := "worker_" + GenerateID(10)
 		if err := StoreWorkerIDToRedis(workerID, mID, "localhost", 6379); err != nil {
-			fmt.Println("Error storing messages to Redis:", err)
+			fmt.Println("ERROR: Error storing workerID to Redis:", err)
+			return
 		} else {
-			fmt.Println("Set Master " + mID + " to known Node")
+			fmt.Println("INFO: Add Master " + mID + " to known Node")
 		}
-		// IP, err := RetrieveIPFromMasterID(mID, "localhost", 6379)
-		// err = writePidToFile(pidFile)
-		// if err != nil {
-		// 	fmt.Println("Error writing PID to file:", err)
-		// 	return
-		// }
-		// if err != nil {
-		// 	fmt.Println("Error:", err)
-		// } else {
-		// 	fmt.Printf("IP for Master %s: %s\n", mID, IP)
-		// 	startTCPConnection(IP, 8080, workerID)
-		// }
 	case "stop":
 		// Stop the process from the PID file
 		err := leaveSwarm()
 		if err != nil {
-			fmt.Println("Error to leave Swarm: ", err)
+			fmt.Println("ERROR: Error to leave Swarm: ", err)
 		}
 		err = stopProcessFromPidFile(pidFile)
 		if err != nil {
-			fmt.Println("Error stopping process:", err)
+			fmt.Println("ERROR: Error stopping process:", err)
 		}
 	case "help":
 		printHelp()
